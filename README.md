@@ -14,18 +14,30 @@ The client API runs on PORT `9200` by default
 
 ## APIs
 
-`GET /secrets/{organization_id}`
-Get organization secrets
 
-`PUT  /secrets/{organization_id}`
-Create organization secrets
+`POST  /initialize/{organization_id}`
+This will create and mount an AWS path for the organization 
+
+
+`POST  /configure/{organization_id}`
+This configures the root AWS access key or the organization
+
+Request Body
 ```json
 {
-  "AWS_ACCESS_KEY_ID": "value",
-  "SECRET_KEY": "value"
+  "aws_secret_key": "value",
+  "secret_key": "value",
+  "region": "us-east-1"
 }
 ```
 
 
-## Limitations
-You cannot append new values to previous secret values (This can be improved by implementing secret versions)
+`POST  /generate-credentials/{organization_id}`
+This generates a temporary credential for the organization
+```json
+{
+  "access_key": "AKI***",
+  "secret_key": "**",
+  "security_token": null
+}
+```
