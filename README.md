@@ -41,3 +41,8 @@ This generates a temporary credential for the organization
   "security_token": null
 }
 ```
+
+
+`POST  /run-tf/{organization_id}`
+This applies the terraform file in the directory
+Note that this currently doesn't work with docker

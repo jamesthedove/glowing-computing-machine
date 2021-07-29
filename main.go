@@ -1,27 +1,33 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"github.com/gorilla/mux"
+	"github.com/hashicorp/terraform-exec/tfexec"
 	"log"
 	"net/http"
 	"os"
+	"time"
 )
 import _ "github.com/joho/godotenv/autoload"
 import vault "github.com/hashicorp/vault/api"
 
 var vaultClient *vault.Client
+var tf *tfexec.Terraform
 
 func main() {
 	initVault()
+	initTerraform()
 
 	r := mux.NewRouter()
 	r.HandleFunc("/initialize/{organization}", initializeOrganization).Methods("POST")
 	r.HandleFunc("/configure/{organization}", configureAWS).Methods("POST")
 	r.HandleFunc("/generate-credentials/{organization}", generateCredentials).Methods("POST")
+	r.HandleFunc("/run-tf/{organization}", runTF).Methods("POST")
 
-	fmt.Println("vault client running on port ", os.Getenv("PORT"))
+	log.Println("vault client running on port ", os.Getenv("PORT"))
 	log.Fatal(http.ListenAndServe(":"+os.Getenv("PORT"), r))
 }
 
@@ -37,7 +43,22 @@ func initVault() {
 	vaultClient = client
 	vaultClient.SetToken(os.Getenv("VAULT_TOKEN"))
 
-	fmt.Println("connected to vault")
+	log.Println("connected to vault")
+}
+
+func initTerraform() {
+	workingDir, _ := os.Getwd()
+	//TODO install terraform in docker
+	terraform, err := tfexec.NewTerraform(workingDir, "/usr/local/bin/terraform")
+
+	tf = terraform
+
+	if err != nil {
+		log.Fatalf("error running NewTerraform: %s", err)
+	}
+
+	log.Println("terraform initialized")
+
 }
 
 func getOrganizationPath(id string) string {
@@ -50,7 +71,7 @@ func generateCredentials(w http.ResponseWriter, r *http.Request) {
 	secret, err := vaultClient.Logical().Read(getOrganizationPath(vars["organization"]) + "/creds/backend-role")
 
 	if err != nil {
-		fmt.Println(err)
+		log.Println(err)
 		w.WriteHeader(http.StatusBadRequest)
 		fmt.Fprintf(w, err.Error())
 		return
@@ -82,7 +103,7 @@ func configureAWS(w http.ResponseWriter, r *http.Request) {
 	})
 
 	if err != nil {
-		fmt.Println(err)
+		log.Println(err)
 		w.WriteHeader(http.StatusBadRequest)
 		fmt.Fprintf(w, err.Error())
 		return
@@ -96,10 +117,9 @@ func configureAWS(w http.ResponseWriter, r *http.Request) {
 				  "Version": "2012-10-17",
 				  "Statement": [
 					{
-					  "Sid": "Stmt1426528957000",
 					  "Effect": "Allow",
 					  "Action": [
-						"ec2:*"
+						"iam:*", "ec2:*"
 					  ],
 					  "Resource": [
 						"*"
@@ -111,7 +131,7 @@ func configureAWS(w http.ResponseWriter, r *http.Request) {
 	})
 
 	if err != nil {
-		fmt.Println(err)
+		log.Println(err)
 		w.WriteHeader(http.StatusBadRequest)
 		fmt.Fprintf(w, err.Error())
 		return
@@ -129,7 +149,7 @@ func initializeOrganization(w http.ResponseWriter, r *http.Request) {
 	})
 
 	if err != nil {
-		fmt.Println(err)
+		log.Println(err)
 		w.WriteHeader(http.StatusBadRequest)
 		fmt.Fprintf(w, err.Error())
 		return
@@ -137,4 +157,39 @@ func initializeOrganization(w http.ResponseWriter, r *http.Request) {
 
 	w.WriteHeader(http.StatusOK)
 	fmt.Fprintf(w, "Organization mounted")
+}
+
+func runTF(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+
+	err := tf.Init(context.Background(), tfexec.Upgrade(true))
+	if err != nil {
+		log.Fatalf("error running Init: %s", err)
+	}
+
+	secret, err := vaultClient.Logical().Read(getOrganizationPath(vars["organization"]) + "/creds/backend-role")
+
+	if err != nil {
+		fmt.Fprintf(w, err.Error())
+		return
+	}
+
+	err = os.Setenv("TF_VAR_aws_access_key", secret.Data["access_key"].(string))
+	err = os.Setenv("TF_VAR_aws_secret_key", secret.Data["secret_key"].(string))
+
+	if err != nil {
+		fmt.Fprintf(w, err.Error())
+		return
+	}
+
+	//wait for credentials to be active
+	time.Sleep(5 * time.Second)
+
+	err = tf.Apply(context.Background())
+
+	if err != nil {
+		log.Fatalf("error running apply %s", err)
+	}
+
+	fmt.Fprintf(w, "terraform applied")
 }
